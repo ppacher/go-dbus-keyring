@@ -1,9 +1,31 @@
+// Copyright 2019 Patrick Pacher. All rights reserved. Use of
+// this source code is governed by the included Simplified BSD license.
+
 package keyring
 
 import (
 	"fmt"
 
 	"github.com/godbus/dbus"
+)
+
+const (
+	// Methods
+	collectionMethodDelete      = CollectionInterface + ".Delete"
+	collectionMethodSearchItems = CollectionInterface + ".SearchItems"
+	collectionMethodCreateItem  = CollectionInterface + ".CreateItem"
+
+	// signals
+	collectionSignalItemCreated = CollectionInterface + ".ItemCreated"
+	collectionSignalItemDeleted = CollectionInterface + ".ItemDeleted"
+	collectionSignalItemChanged = CollectionInterface + ".ItemChanged"
+
+	// Properties
+	collectionPropLabel    = CollectionInterface + ".Label"
+	collectionPropLocked   = CollectionInterface + ".Locked"
+	collectionPropItems    = CollectionInterface + ".Items"
+	collectionPropCreated  = CollectionInterface + ".Created"
+	collectionPropModified = CollectionInterface + ".Modified"
 )
 
 // Collection provides access secret collections from org.freedesktop.secret
@@ -22,24 +44,25 @@ type Collection interface {
 	// Locked returns true if the collection is locked
 	Locked() (bool, error)
 
-	// Lock locks the collection
-	Lock() error
-
-	// Delete deletes the collection
+	// Delete deletes the collection and handles any prompt required
 	Delete() error
 
 	// GetAllItems returns all items in the collection
-	GetAllItems() ([]dbus.ObjectPath, error)
+	GetAllItems() ([]Item, error)
+
+	// GetItem returns the first item with the given label
+	GetItem(name string) (Item, error)
 
 	// SearchItems searches for items in the collection
-	SearchItems(attrs map[string]string) ([]dbus.ObjectPath, error)
+	SearchItems(attrs map[string]string) ([]Item, error)
 
 	// CreateItem creates a new item inside the collection optionally overwritting an
 	// existing one
-	CreateItem(session dbus.ObjectPath, label string, attr map[string]string, secret []byte, contentType string, replace bool) (dbus.ObjectPath, error)
+	CreateItem(session dbus.ObjectPath, label string, attr map[string]string, secret []byte, contentType string, replace bool) (Item, error)
 }
 
 type collection struct {
+	conn *dbus.Conn
 	path dbus.ObjectPath
 	obj  dbus.BusObject
 }
@@ -48,6 +71,7 @@ type collection struct {
 func GetCollection(conn *dbus.Conn, path dbus.ObjectPath) (Collection, error) {
 	obj := conn.Object(SecretServiceDest, dbus.ObjectPath(path))
 	coll := &collection{
+		conn: conn,
 		obj:  obj,
 		path: path,
 	}
@@ -66,7 +90,7 @@ func (c *collection) Path() dbus.ObjectPath {
 
 // GetLabel returns the label of the collection
 func (c *collection) GetLabel() (string, error) {
-	v, err := c.obj.GetProperty(CollectionInterface + ".Label")
+	v, err := c.obj.GetProperty(collectionPropLabel)
 	if err != nil {
 		return "", err
 	}
@@ -81,12 +105,12 @@ func (c *collection) GetLabel() (string, error) {
 
 // SetLabel sets the label of the connection
 func (c *collection) SetLabel(l string) error {
-	return c.obj.SetProperty(CollectionInterface+".Lable", l)
+	return c.obj.SetProperty(collectionPropLabel, l)
 }
 
 // Locked returns true if the collection is locked
 func (c *collection) Locked() (bool, error) {
-	v, err := c.obj.GetProperty(CollectionInterface + ".Locked")
+	v, err := c.obj.GetProperty(collectionPropLocked)
 	if err != nil {
 		return false, err
 	}
@@ -98,33 +122,80 @@ func (c *collection) Locked() (bool, error) {
 	return false, ErrInvalidType("bool", v.Value())
 }
 
-// Lock locks the collection
-func (c *collection) Lock() error {
-	return fmt.Errorf("not yet implemented")
-}
-
-// Delete deletes the collection
+// Delete deletes the collection and handles any prompt required
 func (c *collection) Delete() error {
-	return fmt.Errorf("not yet implemented")
+	call := c.obj.Call(collectionMethodDelete, 0)
+	if call.Err != nil {
+		return call.Err
+	}
+
+	var promptPath dbus.ObjectPath
+	if err := call.Store(&promptPath); err != nil {
+		return err
+	}
+
+	if promptPath != "/" {
+		p := GetPrompt(c.conn, promptPath)
+		res, err := p.Prompt("")
+		if err != nil {
+			return err
+		}
+
+		result := <-res
+		if result == nil {
+			return fmt.Errorf("prompted dismissed")
+		}
+	}
+
+	return nil
 }
 
 // GetAllItems returns all items in the collection
-func (c *collection) GetAllItems() ([]dbus.ObjectPath, error) {
-	v, err := c.obj.GetProperty(CollectionInterface + ".Items")
+func (c *collection) GetAllItems() ([]Item, error) {
+	v, err := c.obj.GetProperty(collectionPropItems)
 	if err != nil {
 		return nil, err
 	}
 
-	if s, ok := v.Value().([]dbus.ObjectPath); ok {
-		return s, nil
+	if list, ok := v.Value().([]dbus.ObjectPath); ok {
+		items := make([]Item, len(list))
+		for i, it := range list {
+			items[i], err = GetItem(c.conn, it)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return items, nil
 	}
 
 	return nil, ErrInvalidType("[]string", v.Value())
 }
 
+// GetItem returns the first item with the given name
+func (c *collection) GetItem(name string) (Item, error) {
+	all, err := c.GetAllItems()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, i := range all {
+		l, err := i.GetLabel()
+		if err != nil {
+			return nil, err
+		}
+
+		if l == name {
+			return i, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no such item")
+}
+
 // SearchItems searches for items in the collection
-func (c *collection) SearchItems(attrs map[string]string) ([]dbus.ObjectPath, error) {
-	call := c.obj.Call(CollectionInterface+".SearchItems", 0, attrs)
+func (c *collection) SearchItems(attrs map[string]string) ([]Item, error) {
+	call := c.obj.Call(collectionMethodSearchItems, 0, attrs)
 
 	if call.Err != nil {
 		fmt.Println(call.Err.Error())
@@ -136,12 +207,22 @@ func (c *collection) SearchItems(attrs map[string]string) ([]dbus.ObjectPath, er
 		return nil, ErrInvalidType("[]string", call.Body[0])
 	}
 
-	return list, nil
+	var err error
+
+	items := make([]Item, len(list))
+	for i, it := range list {
+		items[i], err = GetItem(c.conn, it)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return items, nil
 }
 
 // CreateItem creates a new item inside the collection optionally overwritting an
 // existing one
-func (c *collection) CreateItem(session dbus.ObjectPath, label string, attr map[string]string, secret []byte, contentType string, replace bool) (dbus.ObjectPath, error) {
+func (c *collection) CreateItem(session dbus.ObjectPath, label string, attr map[string]string, secret []byte, contentType string, replace bool) (Item, error) {
 	sec := Secret{
 		Session:     session,
 		Parameters:  []byte(""),
@@ -149,23 +230,23 @@ func (c *collection) CreateItem(session dbus.ObjectPath, label string, attr map[
 		ContentType: contentType,
 	}
 
-	call := c.obj.Call(CollectionInterface+".CreateItem", 0, map[string]dbus.Variant{
+	call := c.obj.Call(collectionMethodCreateItem, 0, map[string]dbus.Variant{
 		SecretServicePrefix + "Item.Label":      dbus.MakeVariant(label),
 		SecretServicePrefix + "Item.Attributes": dbus.MakeVariant(attr),
 	}, sec, replace)
 
 	if call.Err != nil {
-		return "", call.Err
+		return nil, call.Err
 	}
 
 	if len(call.Body) != 2 {
-		return "", fmt.Errorf("expected 2 results but got %d", len(call.Body))
+		return nil, fmt.Errorf("expected 2 results but got %d", len(call.Body))
 	}
 
 	itemPath, ok := call.Body[0].(dbus.ObjectPath)
 	if !ok {
-		return "", ErrInvalidType("ObjectPath", call.Body[0])
+		return nil, ErrInvalidType("ObjectPath", call.Body[0])
 	}
 
-	return itemPath, nil
+	return GetItem(c.conn, itemPath)
 }

@@ -1,6 +1,13 @@
+// Copyright 2019 Patrick Pacher. All rights reserved. Use of
+// this source code is governed by the included Simplified BSD license.
+
 package keyring
 
-import "github.com/godbus/dbus"
+import (
+	"fmt"
+
+	"github.com/godbus/dbus"
+)
 
 const (
 	SecretServiceDest   = "org.freedesktop.secrets"
@@ -9,7 +16,9 @@ const (
 
 	CollectionInterface = SecretServicePrefix + "Collection"
 	SessionInterface    = SecretServicePrefix + "Session"
+	ItemInterface       = SecretServicePrefix + "Item"
 	ServiceInterface    = SecretServicePrefix + "Service"
+	PromptInterface     = SecretServicePrefix + "Prompt"
 	DefaultCollection   = SecretServicePath + "/aliases/default"
 	SessionCollection   = SecretServicePath + "/collection/session"
 
@@ -25,4 +34,8 @@ type Secret struct {
 	Parameters  []byte
 	Value       []byte
 	ContentType string
+}
+
+func ErrInvalidType(expected string, value interface{}) error {
+	return fmt.Errorf("invalid type: expected a '%s' but got '%T'", expected, value)
 }
