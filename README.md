@@ -33,7 +33,7 @@ The documentation for this project is available on [godoc.org](https://godoc.org
 package main
 
 import (
-    "github.com/godbus/dbus"
+    "github.com/godbus/dbus/v5"
     keyring "github.com/ppacher/go-dbus-keyring"
 )
 

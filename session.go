@@ -4,7 +4,7 @@
 package keyring
 
 import (
-	"github.com/godbus/dbus"
+	"github.com/godbus/dbus/v5"
 )
 
 const (
