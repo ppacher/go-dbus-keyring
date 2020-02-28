@@ -6,7 +6,7 @@ import (
 
 	keyring "github.com/ppacher/go-dbus-keyring"
 
-	"github.com/godbus/dbus"
+	"github.com/godbus/dbus/v5"
 )
 
 func checkErr(err error) {
