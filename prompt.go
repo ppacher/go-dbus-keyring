@@ -71,7 +71,6 @@ func (p *prompt) Prompt(windowID string) (<-chan *dbus.Variant, error) {
 		var res []interface{}
 
 		for s := range sig {
-			fmt.Println(s.Path)
 			if s.Path == p.path {
 				res = s.Body
 				break
